@@ -1,0 +1,28 @@
+# ── Patient data and all derived outputs: never commit ──
+data/
+outputs/
+*.dcm
+*.chm
+*.CHM
+*.htm
+*.html
+*.csv
+*.xlsx
+*.xls
+*.mp4
+*.pt
+!requirements.txt
+
+# EchoPrime is cloned separately
+EchoPrime/
+model_data/
+
+# Python / IDE
+__pycache__/
+*.pyc
+.spyproject/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

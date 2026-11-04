@@ -1,0 +1,19 @@
+# Python 3.10.19
+#
+# PyTorch with CUDA 12.1 (install first):
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+
+# EchoPrime inference
+transformers==4.57.0
+pydicom==2.3.1
+opencv-python-headless==4.8.1.78
+
+# Ground truth extraction, evaluation, tables
+numpy==1.26.4
+pandas==2.3.3
+scikit-learn==1.7.2
+beautifulsoup4==4.13.5
+openpyxl==3.1.5
+tqdm==4.67.1
