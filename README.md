@@ -1,4 +1,4 @@
-# EchoPrime external validation — Hippokration cohort
+# EchoPrime external validation 
 
 Code for the external validation of [EchoPrime](https://github.com/echonet/EchoPrime),
 a multimodal echocardiography foundation model, on transthoracic echocardiograms
