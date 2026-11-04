@@ -1,8 +1,7 @@
 # EchoPrime external validation 
 
 Code for the external validation of [EchoPrime](https://github.com/echonet/EchoPrime),
-a multimodal echocardiography foundation model, on transthoracic echocardiograms
-from the **3rd Cardiology Department, Hippokration General Hospital, Thessaloniki, Greece**.
+a multimodal echocardiography foundation model, on transthoracic echocardiograms.
 
 EchoPrime is used as released (no fine-tuning, no code changes). This repository contains:
 
