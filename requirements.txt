@@ -17,3 +17,7 @@ scikit-learn==1.7.2
 beautifulsoup4==4.13.5
 openpyxl==3.1.5
 tqdm==4.67.1
+
+# Figures (optional; RVSP confusion matrices only)
+matplotlib==3.10.7
+seaborn==0.13.2

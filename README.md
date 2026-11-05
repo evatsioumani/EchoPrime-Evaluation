@@ -1,7 +1,8 @@
-# EchoPrime external validation 
+# EchoPrime external validation — Hippokration cohort
 
 Code for the external validation of [EchoPrime](https://github.com/echonet/EchoPrime),
-a multimodal echocardiography foundation model, on transthoracic echocardiograms.
+a multimodal echocardiography foundation model, on transthoracic echocardiograms
+from the **3rd Cardiology Department, Hippokration General Hospital, Thessaloniki, Greece**.
 
 EchoPrime is used as released (no fine-tuning, no code changes). This repository contains:
 
@@ -13,10 +14,6 @@ EchoPrime is used as released (no fine-tuning, no code changes). This repository
 > **No patient data is included.** DICOM studies, clinical reports, ID lists and every
 > derived file (labels, predictions, results) stay at the hospital. `.gitignore`
 > blocks `data/` and `outputs/`.
-
-> **Status:** work in progress. Still to be added: the supplementary operating-point
-> analysis (Table S2), the RVSP classification evaluation (35 mmHg), and the scripts
-> that build the patient metadata used in Table S1.
 
 ---
 
@@ -41,8 +38,9 @@ EchoPrime is used as released (no fine-tuning, no code changes). This repository
 │   ├── lvef/ef_extractor.py                 LVEF: exact / range / modifier
 │   └── rvsp/rvsp_binary_extractor.py        RVSP: numeric value + label at 35 mmHg
 ├── 03_evaluation/
-│   ├── evaluate_binary_findings_final.py    binary findings (AUROC, AUPRC, Sens, Spec, …)
-│   └── ef_rvsp_validation_v2.py             LVEF and RVSP regression (MAE, RMSE, R²)
+│   ├── evaluate_binary_findings_final.py    binary findings (Table 1, Table S2)
+│   ├── ef_rvsp_validation_v2.py             LVEF and RVSP regression (MAE, RMSE, R²)
+│   └── rvsp_binary_evaluation_v7.py         RVSP classification at 35 mmHg
 ├── 04_tables/
 │   └── demographics_tableS1_generator_v6.py cohort characteristics (Table S1)
 ├── environment/                             full pip / conda exports
@@ -68,8 +66,9 @@ Greek reports ──► 02_ground_truth/binary ────► ground_truth_labe
 | 2a | `02_ground_truth/binary/run_ground_truth_final.py` | `ground_truth_labels.csv`, `ground_truth_long.csv`, `ground_truth_summary.csv`, `manifest.json` |
 | 2b | `02_ground_truth/lvef/ef_extractor.py` | `ef_ground_truth.csv` |
 | 2c | `02_ground_truth/rvsp/rvsp_binary_extractor.py` | `rvsp_ground_truth.csv` |
-| 3a | `03_evaluation/evaluate_binary_findings_final.py` | `binary_evaluation.xlsx`, `per_exam_predictions.csv` |
+| 3a | `03_evaluation/evaluate_binary_findings_final.py` | `binary_evaluation.xlsx` (sheets `Summary`, `TableS2_Spec90`, …), `per_exam_predictions.csv` |
 | 3b | `03_evaluation/ef_rvsp_validation_v2.py` | `regression_results.xlsx` |
+| 3c | `03_evaluation/rvsp_binary_evaluation_v7.py` | `rvsp_binary_evaluation_v7.xlsx`, confusion-matrix PNGs |
 | 4 | `04_tables/demographics_tableS1_generator_v6.py` | `demographics_tableS1.xlsx` |
 
 Steps 1 and 2 are independent; step 3 needs both; step 4 needs step 2 and the study list from step 1.
@@ -107,7 +106,7 @@ data/
   lists/inclusion_ids.txt        studies to run inference on
   lists/exclusion_ids.txt        studies excluded from all analyses
   metadata/study_patient_mapping.csv   exam_id → patient_id
-  metadata/metadata_processed.xlsx     demographics (Table S1 only)
+  metadata/metadata_processed.xlsx     demographics (Table S1 only; see note below)
 outputs/                         everything the scripts write
 ```
 
@@ -121,6 +120,9 @@ Notes:
   nine extractor scripts from its own folder and calls them, so keep the folder intact.
   Self-tests in the extractors run automatically; the SHA-256 of every script is
   written to `manifest.json` together with the variant definitions.
+- **Table S1** reads `metadata_processed.xlsx`, one row per study with age, sex, height,
+  weight and BSA taken from the DICOM headers and the report header. This file is
+  prepared before the analysis and is not produced by the scripts in this repository.
 
 ## Ground truth
 
@@ -159,15 +161,33 @@ uses exact values plus modifiers whose value is not the 35 mmHg threshold.
 
 ## Evaluation
 
-- EchoPrime's native outputs (`predict_metrics`) are evaluated directly; no model is trained here.
-- Binary findings: AUROC, AUPRC, sensitivity, specificity, PPV, NPV, accuracy, F1 at the
-  0.5 threshold, plus a Youden threshold reported as exploratory. Where a finding has two
-  label variants, ΔAUROC and ΔAUPRC between them are tested on the same exams, with
-  Holm–Bonferroni correction across the comparison family.
-- LVEF and RVSP: MAE, RMSE, R².
-- All 95% CIs come from a **patient-level cluster bootstrap** (10,000 resamples, seed 42),
-  since some patients have more than one exam. Bootstrap p-values use the
-  Phipson–Smyth correction, (b+1)/(m+1).
+EchoPrime's native outputs (`predict_metrics`) are evaluated directly; no model is trained here.
+
+**Binary findings** (`evaluate_binary_findings_final.py`)
+- AUROC, AUPRC, and sensitivity, specificity, PPV, NPV, accuracy and F1 at the 0.5 threshold.
+- **Table S2:** one label variant per finding (`TABLE_S2_VARIANT`). The threshold is the lowest
+  score giving specificity ≥ 90%, which gives the highest sensitivity under that constraint.
+  It is chosen once on the full cohort and held fixed across bootstrap resamples.
+  Because it is chosen in-sample, its performance may be optimistic in a new cohort.
+- A Youden threshold is reported as exploratory.
+- Where a finding has two label variants, ΔAUROC and ΔAUPRC are tested on the same exams
+  and resamples, with Holm–Bonferroni correction across all variant comparisons.
+
+**RVSP classification** (`rvsp_binary_evaluation_v7.py`)
+- Elevated (≥ 35 mmHg) vs normal. The label comes from `rvsp_binary_extractor.py`; the
+  prediction is EchoPrime's continuous RVSP (`pulmonary_artery_pressure_continuous`)
+  at the same 35 mmHg cut-off.
+- There are two label variants:
+  - `all_methods`: every exam with a label (exact, modifier, range, qualitative).
+  - `exact_only`: exams with a numeric RVSP value.
+- Alternative thresholds (Youden, sensitivity/specificity targets) are exploratory.
+
+**LVEF and RVSP regression** (`ef_rvsp_validation_v2.py`)
+- MAE, RMSE, R².
+
+**Uncertainty.** All 95% CIs come from a **patient-level cluster bootstrap** (10,000
+resamples, seed 42), since some patients have more than one exam. Bootstrap p-values are
+two-sided with the Phipson–Smyth correction, (b+1)/(m+1).
 
 ## Licence
 

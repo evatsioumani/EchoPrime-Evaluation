@@ -36,9 +36,11 @@ change only `README.md`.
 | opencv-python-headless | 4.8.1.78 | video preprocessing |
 | numpy | 1.26.4 | all (incl. AUROC/AUPRC and the cluster bootstrap) |
 | pandas | 2.3.3 | all |
-| scikit-learn | 1.7.2 | regression metrics (MAE, RMSE, R²) |
+| scikit-learn | 1.7.2 | regression metrics; ROC thresholds (RVSP) |
 | beautifulsoup4 | 4.13.5 | report HTML parsing (`html.parser`) |
 | openpyxl | 3.1.5 | Excel output |
+| matplotlib | 3.10.7 | confusion-matrix figures (RVSP, optional) |
+| seaborn | 0.13.2 | confusion-matrix figures (RVSP, optional) |
 | tqdm | 4.67.1 | progress bars |
 | 7-Zip | any | only for reports stored as `.CHM` |
 
