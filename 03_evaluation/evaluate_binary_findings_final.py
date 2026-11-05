@@ -10,6 +10,10 @@ Binary evaluation του EchoPrime για ΟΛΑ τα findings και ΟΛΕΣ �
     AUROC, AUPRC, Sensitivity, Specificity, PPV, NPV, Accuracy, F1 (όριο 0.5),
     TP / FP / FN / TN — με 95% CI από patient-level cluster bootstrap.
   Exploratory: όριο Youden (επιλέγεται και αξιολογείται στα ίδια δεδομένα).
+  Table S2: για την κύρια εκδοχή κάθε finding (TABLE_S2_VARIANT), όριο που
+    δίνει specificity ≥ SPEC_TARGET με τη μέγιστη sensitivity. Το όριο
+    επιλέγεται ΜΙΑ φορά στο πλήρες δείγμα και μένει σταθερό στο bootstrap
+    (CI = δειγματοληπτική αβεβαιότητα στο συγκεκριμένο σημείο λειτουργίας).
   Για findings με >1 εκδοχή (π.χ. strict vs incl_mild):
     ΔAUROC και ΔAUPRC (εκδοχή B − εκδοχή A) με 95% CI και bootstrap p-value,
     Holm–Bonferroni σε όλη την οικογένεια συγκρίσεων εκδοχών.
@@ -30,6 +34,7 @@ OUTPUT (στο OUTPUT_DIR)
   binary_evaluation.xlsx
      Summary              μία γραμμή ανά (finding, εκδοχή), όριο 0.5
      Youden_Exploratory   ίδιες μετρικές στο όριο Youden
+     TableS2_Spec90       17 findings, κύρια εκδοχή, όριο για specificity ≥ 90%
      Variant_Comparison   ΔAUROC / ΔAUPRC ανά finding, Holm
      Cohort               εξετάσεις που μπήκαν / έμειναν εκτός ανά finding
      Missing_or_Unmatched γραμμές GT χωρίς πρόβλεψη και αντίστροφα
@@ -133,6 +138,33 @@ TASKS = {
                                        [('v5', 'dilated_ivc')]),
 }
 
+# ── TABLE S2 ─────────────────────────────────────────────────────────────────
+# Όριο λειτουργίας: specificity ≥ SPEC_TARGET, με τη μέγιστη sensitivity.
+SPEC_TARGET = 0.90
+EXPECTED_N  = 2359      # έλεγχος: N εξετάσεων ανά finding στον Table S2 (None = χωρίς έλεγχο)
+
+# finding → (εκδοχή που μπαίνει στον Table S2, όνομα γραμμής στον πίνακα)
+TABLE_S2_VARIANT = {
+    'pacemaker':                      ('incl_icd',  'Pacemaker'),
+    'rv_systolic_function_depressed': ('strict',    'RV systolic dysfunction'),
+    'right_ventricle_dilation':       ('v5',        'RV dilation'),
+    'right_atrium_dilation':          ('v5',        'RA dilation'),
+    'left_atrium_dilation':           ('v5',        'LA dilation'),
+    'mitraclip':                      ('v5',        'MitraClip'),
+    'mitral_annular_calcification':   ('strict',    'Mitral annular calcification'),
+    'mitral_stenosis':                ('strict',    'Mitral stenosis'),
+    'mitral_regurgitation':           ('strict',    'Mitral regurgitation'),
+    'tavr':                           ('excl_mech', 'TAVR'),
+    'bicuspid_aov':                   ('v5',        'Bicuspid AV'),
+    'aortic_stenosis':                ('strict',    'Aortic stenosis'),
+    'aortic_regurgitation':           ('strict',    'Aortic regurgitation'),
+    'aortic_root_dilation':           ('v5',        'Aortic root dilation'),
+    'tricuspid_valve_regurgitation':  ('strict',    'Tricuspid regurgitation'),
+    'pericardial_effusion':           ('strict',    'Pericardial effusion'),
+    'dilated_ivc':                    ('v5',        'Dilated IVC'),
+}
+DASH = "–"   # CI που δεν μπορεί να εκτιμηθεί (λεζάντα Table S2)
+
 THR_KEYS = ["sensitivity", "specificity", "ppv", "npv", "accuracy", "f1"]
 THR_LABELS = {"sensitivity": "Sensitivity", "specificity": "Specificity", "ppv": "PPV",
               "npv": "NPV", "accuracy": "Accuracy", "f1": "F1 Score"}
@@ -181,6 +213,17 @@ def fmt_ci(point, ci, d=4):
     lo, hi = ci
     if pd.isna(lo):
         return f"{point:.{d}f}"
+    return f"{point:.{d}f} ({lo:.{d}f}-{hi:.{d}f})"
+
+
+def fmt_ci_dash(point, ci, d=4):
+    """Όπως fmt_ci, αλλά με παύλα: '–' αν η μετρική δεν ορίζεται,
+    'x.xxxx (–)' αν ορίζεται αλλά το CI δεν μπορεί να εκτιμηθεί."""
+    if point is None or pd.isna(point):
+        return DASH
+    lo, hi = ci
+    if pd.isna(lo):
+        return f"{point:.{d}f} ({DASH})"
     return f"{point:.{d}f} ({lo:.{d}f}-{hi:.{d}f})"
 
 
@@ -250,6 +293,23 @@ def youden_threshold(y, scores):
     return float(thr_vals[best])
 
 
+def spec_threshold(y, scores, target=SPEC_TARGET):
+    """Χαμηλότερο όριο (σε μοναδικές τιμές score) με specificity ≥ target,
+    δηλ. FPR ≤ 1 − target → μέγιστη sensitivity υπό τον περιορισμό.
+    Κανόνας θετικού: score ≥ όριο (ισοβαθμίες μπαίνουν ολόκληρες).
+    Επιστρέφει np.inf αν ούτε η ομάδα με το υψηλότερο score δεν χωράει
+    (τότε όλες οι προβλέψεις είναι αρνητικές)."""
+    idx = ScoreIndex(scores)
+    yo = y[idx.order]
+    neg_g = np.bincount(idx.group, weights=(yo == 0).astype(float), minlength=idx.n_groups)
+    fpr = np.cumsum(neg_g) / neg_g.sum()
+    ok = np.where(fpr <= (1 - target) + 1e-12)[0]
+    if not len(ok):
+        return np.inf
+    thr_vals = scores[idx.order][np.searchsorted(idx.group, np.arange(idx.n_groups))]
+    return float(thr_vals[ok[-1]])
+
+
 # =============================================================================
 # CLUSTER BOOTSTRAP
 # =============================================================================
@@ -295,11 +355,12 @@ def holm(pvals):
 # EVALUATION ΕΝΟΣ FINDING (όλες οι εκδοχές μαζί, paired)
 # =============================================================================
 
-def evaluate_finding(finding, pred_col, variants, df):
+def evaluate_finding(finding, pred_col, variants, df, s2_variant=None, s2_label=None):
     """
     df: εξετάσεις του finding (κοινό σύνολο), με στήλες patient_id, score,
         και μία στήλη GT ανά εκδοχή.
-    Επιστρέφει: (summary_rows, youden_rows, comparison_rows, n_skipped)
+    s2_variant: εκδοχή για τον Table S2 (None = δεν μπαίνει στον πίνακα).
+    Επιστρέφει: (summary_rows, youden_rows, comparison_rows, s2_rows, n_skipped)
     """
     scores = df["score"].to_numpy(float)
     idx = ScoreIndex(scores)
@@ -320,8 +381,18 @@ def evaluate_finding(finding, pred_col, variants, df):
         else:
             yth[v] = (np.nan, None)
 
+    # Table S2: όριο για specificity ≥ SPEC_TARGET (επιλογή μία φορά, σταθερό στο bootstrap)
+    s2 = None
+    if s2_variant is not None:
+        y = Y[s2_variant]
+        if 0 < y.sum() < len(y):
+            t = spec_threshold(y, scores)
+            s2_pred = (scores >= t).astype(int)
+            s2 = (t, s2_pred, weighted_thr_metrics(y, s2_pred, ones))
+
     # Bootstrap — ίδια βάρη για όλες τις εκδοχές
-    boot = {v: {k: [] for k in ["auroc", "auprc"] + THR_KEYS + ["y_" + k for k in THR_KEYS]}
+    boot = {v: {k: [] for k in ["auroc", "auprc"] + THR_KEYS
+                + ["y_" + k for k in THR_KEYS] + ["s_" + k for k in THR_KEYS]}
             for v, _ in variants}
     deltas = {v: {"auroc": [], "auprc": []} for v, _ in variants[1:]}
     pred05 = (scores >= THRESHOLD).astype(int)
@@ -344,6 +415,10 @@ def evaluate_finding(finding, pred_col, variants, df):
                 my = weighted_thr_metrics(Y[v], predY[v], w)
                 for k in THR_KEYS:
                     boot[v]["y_" + k].append(my[k])
+            if s2 is not None and v == s2_variant:
+                ms = weighted_thr_metrics(Y[v], s2[1], w)
+                for k in THR_KEYS:
+                    boot[v]["s_" + k].append(ms[k])
         if any(np.isnan(res[v][0]) for v, _ in variants):
             skipped += 1
             continue
@@ -397,7 +472,50 @@ def evaluate_finding(finding, pred_col, variants, df):
             "Paired resamples": len(da),
             "Note": "" if len(da) else "Μία εκδοχή έχει μία μόνο κλάση — σύγκριση μη εφικτή",
         })
-    return summary, youden, comp, skipped
+
+    # ── Table S2 γραμμή ─────────────────────────────────────────────────────
+    s2_rows = []
+    if s2_variant is not None:
+        col = dict(variants)[s2_variant]
+        y, pt = Y[s2_variant], point[s2_variant]
+        n_pos = int(y.sum())
+        srow = {"Feature": s2_label or finding, "Finding": finding, "Variant": s2_variant,
+                "GT Column": col, "N (Exams)": len(y), "N (Patients)": n_pat,
+                "N Positive": n_pos, "N Negative": len(y) - n_pos,
+                "Prevalence (%)": round(100 * n_pos / len(y), 2) if len(y) else np.nan}
+        if s2 is None:
+            srow["Threshold"] = DASH
+            srow["AUROC (95% CI)"] = fmt_ci_dash(pt["auroc"], ci_of(boot[s2_variant]["auroc"]))
+            srow["AUPRC (95% CI)"] = fmt_ci_dash(pt["auprc"], ci_of(boot[s2_variant]["auprc"]))
+            for k in THR_KEYS:
+                srow[f"{THR_LABELS[k]} (95% CI)"] = DASH
+            for k in ("tp", "fp", "fn", "tn"):
+                srow[k.upper()] = DASH
+            srow["Note"] = "Μία μόνο κλάση — όριο μη εφικτό"
+        else:
+            t, _, ms = s2
+            srow["Threshold"] = (f"> max score ({scores.max():.6f})" if np.isinf(t) else round(t, 6))
+            srow["AUROC (95% CI)"] = fmt_ci_dash(pt["auroc"], ci_of(boot[s2_variant]["auroc"]))
+            srow["AUPRC (95% CI)"] = fmt_ci_dash(pt["auprc"], ci_of(boot[s2_variant]["auprc"]))
+            notes = []
+            if np.isinf(t):
+                notes.append(f"Καμία τιμή score δεν δίνει specificity ≥ {SPEC_TARGET:.0%} "
+                             f"(ισοβαθμία στο υψηλότερο score) — όλες οι προβλέψεις αρνητικές")
+            n_used = len(boot[s2_variant]["s_sensitivity"])
+            for k in THR_KEYS:
+                vals = np.asarray(boot[s2_variant]["s_" + k], dtype=float)
+                srow[f"{THR_LABELS[k]} (95% CI)"] = fmt_ci_dash(ms[k], ci_of(vals))
+                n_nan = int(np.isnan(vals).sum())
+                if n_nan and not pd.isna(ms[k]):
+                    notes.append(f"{THR_LABELS[k]} μη ορισμένο σε {n_nan:,}/{n_used:,} resamples "
+                                 f"(εκτός CI)")
+            for k in ("tp", "fp", "fn", "tn"):
+                srow[k.upper()] = int(ms[k])
+            srow["Note"] = "; ".join(notes)
+        srow["Bootstrap resamples used"] = len(boot[s2_variant]["auroc"])
+        s2_rows.append(srow)
+
+    return summary, youden, comp, s2_rows, skipped
 
 
 # =============================================================================
@@ -439,6 +557,17 @@ def main():
     out_dir = Path(OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     issues, excluded_log, cohort = [], [], []
+
+    # Έλεγχος ρυθμίσεων Table S2 πριν από οτιδήποτε άλλο
+    for f, (v, _) in TABLE_S2_VARIANT.items():
+        if f not in TASKS:
+            logger.error(f"TABLE_S2_VARIANT: finding '{f}' δεν υπάρχει στα TASKS")
+            sys.exit(1)
+        if v not in [vv for vv, _ in TASKS[f][1]]:
+            logger.error(f"TABLE_S2_VARIANT: εκδοχή '{v}' δεν υπάρχει για '{f}'. "
+                         f"Διαθέσιμες: {[vv for vv, _ in TASKS[f][1]]}")
+            sys.exit(1)
+
     excluded = load_exclusion_list(EXCLUSION_FILE)
 
     # ── GT ──────────────────────────────────────────────────────────────────
@@ -497,7 +626,7 @@ def main():
         boot_type = "Exam-level bootstrap (no patient map)"
 
     # ── Ανά finding ─────────────────────────────────────────────────────────
-    summary, youden, comp = [], [], []
+    summary, youden, comp, table_s2 = [], [], [], []
     per_exam = merged[["exam_id", "patient_id"]].copy()
     for finding, (pred_col, variants) in TASKS.items():
         pc = f"pred__{pred_col}"
@@ -548,10 +677,20 @@ def main():
             continue
 
         logger.info(f"[{finding}] N={len(d)} | εκδοχές: {', '.join(v for v, _ in variants)} | bootstrap…")
-        s, y, c, skipped = evaluate_finding(finding, pred_col, variants, d)
+        s2_variant, s2_label = TABLE_S2_VARIANT.get(finding, (None, None))
+        s, y, c, s2, skipped = evaluate_finding(finding, pred_col, variants, d,
+                                                s2_variant, s2_label)
         summary += s
         youden += y
         comp += c
+        table_s2 += s2
+        for r in s2:
+            logger.info(f"   Table S2 [{r['Variant']}] thr={r['Threshold']}  "
+                        f"Sens={r['Sensitivity (95% CI)']}  Spec={r['Specificity (95% CI)']}")
+            if EXPECTED_N is not None and r["N (Exams)"] != EXPECTED_N:
+                logger.warning(f"[{finding}] Table S2: N={r['N (Exams)']} ≠ EXPECTED_N={EXPECTED_N}")
+                issues.append({"Finding": finding, "Study_ID": "", "Issue": "Table S2 N mismatch",
+                               "Detail": f"N={r['N (Exams)']}, expected {EXPECTED_N}"})
         cohort[-1]["Skipped resamples (single class)"] = skipped
         for r in s:
             logger.info(f"   {r['Variant']:<10} prev={r['Prevalence (%)']:>6}%  AUROC={r['AUROC (95% CI)']}")
@@ -573,7 +712,18 @@ def main():
                ("Paired design", "Ίδιο σύνολο εξετάσεων και ίδια resamples για όλες τις εκδοχές ενός finding"),
                ("p-value", "Δίπλευρο bootstrap, Phipson–Smyth (b+1)/(m+1), b = 2·min(#Δ≤0, #Δ≥0)"),
                ("Multiple comparisons", "Holm–Bonferroni σε όλες τις συγκρίσεις εκδοχών (οικογένεια)"),
-               ("Youden", "Exploratory: επιλέγεται και αξιολογείται στα ίδια δεδομένα (αισιόδοξο)")]
+               ("Youden", "Exploratory: επιλέγεται και αξιολογείται στα ίδια δεδομένα (αισιόδοξο)"),
+               ("Table S2 threshold",
+                f"Χαμηλότερο όριο με specificity ≥ {SPEC_TARGET:.0%} (μέγιστη sensitivity υπό τον "
+                f"περιορισμό), κανόνας θετικού score ≥ όριο. Επιλέγεται μία φορά στο πλήρες δείγμα "
+                f"και μένει σταθερό σε όλα τα resamples (fixed-threshold CI). In-sample επιλογή → "
+                f"η απόδοση μπορεί να είναι αισιόδοξη σε νέο δείγμα."),
+               ("Table S2 dashes",
+                f"'{DASH}' = μετρική μη ορισμένη στο πλήρες δείγμα· 'x ({DASH})' = CI μη εκτιμήσιμο "
+                f"(καμία έγκυρη bootstrap τιμή). Resamples όπου η μετρική δεν ορίζεται εξαιρούνται "
+                f"από το CI και καταγράφονται στη στήλη Note.")]
+    for f, (v, lab) in TABLE_S2_VARIANT.items():
+        methods.append((f"Table S2 variant: {lab}", f"{f} → {v} ({dict(TASKS[f][1])[v]})"))
     if GT_MANIFEST and Path(GT_MANIFEST).exists():
         mf = json.loads(Path(GT_MANIFEST).read_text(encoding="utf-8"))
         methods.append(("GT created", mf.get("created", "")))
@@ -591,6 +741,7 @@ def main():
         with pd.ExcelWriter(path, engine="openpyxl") as w:
             pd.DataFrame(summary).to_excel(w, sheet_name="Summary", index=False)
             pd.DataFrame(youden).to_excel(w, sheet_name="Youden_Exploratory", index=False)
+            pd.DataFrame(table_s2).to_excel(w, sheet_name="TableS2_Spec90", index=False)
             pd.DataFrame(comp).to_excel(w, sheet_name="Variant_Comparison", index=False)
             pd.DataFrame(cohort).to_excel(w, sheet_name="Cohort", index=False)
             pd.DataFrame(issues, columns=["Finding", "Study_ID", "Issue", "Detail"]).to_excel(
@@ -612,7 +763,8 @@ def main():
         for col in ws.columns:
             width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(width + 2, 10), 60)
-        ws.freeze_panes = "B2" if ws.title in ("Summary", "Youden_Exploratory", "Variant_Comparison") else "A2"
+        ws.freeze_panes = "B2" if ws.title in ("Summary", "Youden_Exploratory", "TableS2_Spec90",
+                                                "Variant_Comparison") else "A2"
         if ws.max_row > 1:
             ws.auto_filter.ref = ws.dimensions
     # Εναλλασσόμενο χρώμα ανά finding στο Summary
